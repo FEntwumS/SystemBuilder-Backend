@@ -28,3 +28,4 @@ RUN apt install libevent-dev libjson-c-dev -y
 COPY ./litex_generator.py .
 COPY ./generator_aux_CRG.py .
 COPY ./generator_aux_CSR.py .
+COPY ./generator_aux_DMA.py .

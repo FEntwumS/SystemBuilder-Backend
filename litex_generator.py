@@ -20,11 +20,10 @@ from litex.build.generic_platform import *
 from litex.soc.integration.soc_core import *
 from litex.soc.integration.soc import SoCRegion
 from litex.soc.integration.builder import *
-from litex.soc.interconnect import wishbone
-from litex.soc.interconnect import axi
 
 from generator_aux_CSR import *
-from generator_aux_CRG import *         
+from generator_aux_CRG import *
+from generator_aux_DMA import *         
 
 # IOs/Interfaces -----------------------------------------------------------------------------------
 
@@ -196,11 +195,8 @@ class LiteXSoCGenerator(SoCMini):
         #TODO: Check for useful UART options
            
         SoCCore.__init__(self, platform, clk_freq=sys_clk_freq, ident=f"LiteX standalone SoC - {name}", **kwargs)
-# Start of my additions to the generator___________________________________________________________________________________________________________
-        """
-        Here comes the part that handles optional additions to the base-SoC,
-        such as I2C-Master (bitbanged/soft or in hardware), spi_master,  
         
+        """ 
         Currently the implementation is minimalistic. It may make sense to make
         the whole thing more dynamic, however that will require more complex 
         inputs as well.
@@ -211,23 +207,19 @@ class LiteXSoCGenerator(SoCMini):
         which may require later editing in Verilog, separate.
         """        
         if kwargs['soft_i2c']:
-            platform.add_extension(get_i2c_io())
+            platform.add_extension(get_i2c_io(has_interrupt=False))
             from litex.soc.cores.bitbang import I2CMaster
             self.add_module(name="i2c", module=I2CMaster(platform.request("i2cmaster")))
         
         if kwargs['hard_i2c']:
-            platform.add_extension(get_i2c_io())
-            self.add_i2c_master()
-        #TODO: improve litei2c support 
-            """
-            option for interrupt, needs additional field in GUI
+        #TODO: Check if implementing custom name for i2c master is worthwhile
             if kwargs['i2c_interrupt']:
                 platform.add_extension(get_i2c_io())
                 self.add_i2c_master(with_irq=True) #sends interrupt when rx_ready
             else:
                 platform.add_extension(get_i2c_io())
                 self.add_i2c_master()
-            """
+            
         if kwargs['hard_spi']:    
             platform.add_extension(get_spi_master_io())
             self.add_spi_master()
@@ -297,39 +289,35 @@ class LiteXSoCGenerator(SoCMini):
                        here but I'm unsure if that is a good idea...
                 """
                 
-#End of my additions to SoC generator_________________________________________________________________________        
-        # MMAP Slave Interface ---------------------------------------------------------------------
-        """
-            These bus interfaces are not really considere in the current version of the SystemBuilder.
-            This section of code can be deactivate/removed without issue at the moment.
-        """
-        #TODO: Implement "expose_bus" option
-        
+        #Unless an external bus interface is used, these do nothing 
         bus_width = kwargs['bus_data_width']
         bus_addr_width = kwargs['bus_address_width']
-        s_bus = {
-            "wishbone" : wishbone.Interface(data_width=bus_width, adr_width=bus_addr_width),
-            "axi-lite" : axi.AXILiteInterface(data_width=bus_width, address_width=bus_addr_width),
-            "axi" : axi.AXIInterface(data_width=bus_width, address_width=bus_addr_width), #TODO: Test if this works properly! 
-        }[kwargs["bus_standard"]]
-        self.bus.add_master(name="mmap_bus_s", master=s_bus)
-        platform.add_extension(s_bus.get_ios("mmap_bus_s"))
-        wb_pads = platform.request("mmap_bus_s")
-        self.comb += s_bus.connect_to_pads(wb_pads, mode="slave")
+        
+        # MMAP Slave Interface ---------------------------------------------------------------------
+        if kwargs['external_bus_slave_interface']:   
+            s_bus = {
+                "wishbone" : wishbone.Interface(data_width=bus_width, adr_width=bus_addr_width),
+                "axi-lite" : axi.AXILiteInterface(data_width=bus_width, address_width=bus_addr_width),
+                "axi" : axi.AXIInterface(data_width=bus_width, address_width=bus_addr_width), #TODO: Test if this works properly! 
+            }[kwargs["bus_standard"]]
+            self.bus.add_master(name="mmap_bus_s", master=s_bus)
+            platform.add_extension(s_bus.get_ios("mmap_bus_s"))
+            wb_pads = platform.request("mmap_bus_s")
+            self.comb += s_bus.connect_to_pads(wb_pads, mode="slave")
         
         # MMAP Master Interface --------------------------------------------------------------------
         # FIXME: Allow Region configuration.
-        
-        m_bus = {
-            "wishbone" : wishbone.Interface(data_width=bus_width, adr_width=bus_addr_width),
-            "axi-lite" : axi.AXILiteInterface(data_width=bus_width, address_width=bus_addr_width),
-            "axi" : axi.AXIInterface(data_width=bus_width, address_width=bus_addr_width), #TODO: Test if this works properly!
-        }[kwargs["bus_standard"]]
-        wb_region = SoCRegion(origin=0xa000_0000, size=0x1000_0000, cached=False) # FIXME.
-        self.bus.add_slave(name="mmap_bus_m", slave=m_bus, region=wb_region)
-        platform.add_extension(m_bus.get_ios("mmap_bus_m"))
-        wb_pads = platform.request("mmap_bus_m")
-        self.comb += m_bus.connect_to_pads(wb_pads, mode="master")
+        if kwargs['external_bus_master_interface']: 
+            m_bus = {
+                "wishbone" : wishbone.Interface(data_width=bus_width, adr_width=bus_addr_width),
+                "axi-lite" : axi.AXILiteInterface(data_width=bus_width, address_width=bus_addr_width),
+                "axi" : axi.AXIInterface(data_width=bus_width, address_width=bus_addr_width), #TODO: Test if this works properly!
+            }[kwargs["bus_standard"]]
+            wb_region = SoCRegion(origin=0xa000_0000, size=0x1000_0000, cached=False) # FIXME.
+            self.bus.add_slave(name="mmap_bus_m", slave=m_bus, region=wb_region)
+            platform.add_extension(m_bus.get_ios("mmap_bus_m"))
+            wb_pads = platform.request("mmap_bus_m")
+            self.comb += m_bus.connect_to_pads(wb_pads, mode="master")
         
         # Debug ------------------------------------------------------------------------------------
         platform.add_extension(get_debug_ios())
@@ -345,6 +333,7 @@ class LiteXSoCGenerator(SoCMini):
 def main():
     #TODO: Implement option for arbitrary file name? 'configFile_output.yaml'
     args = read_config_file('configFile_demo_soc.yaml')
+    #args = read_config_file('soc_test_new.yaml')
     # SoC.
     soc = LiteXSoCGenerator(
         **args
@@ -418,10 +407,12 @@ def builder_arg_filter(**kwargs):
             if v_key == arg_key:
                 valid_args.update({v_key: kwargs[v_key]})
     #TODO: Add option for compile software?
-    valid_args.update({"compile_software" : True})
+    #valid_args.update({"compile_software" : True})
     valid_args.update({"compile_gateware" : False})
     
-    return valid_args 
+    return valid_args     
 
+  
+    
 if __name__ == "__main__":
     main()
